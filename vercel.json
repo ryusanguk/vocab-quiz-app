@@ -1,4 +1,6 @@
 {
+  "buildCommand": "echo 'Static site'",
+  "outputDirectory": ".",
   "functions": {
     "api/generate-sentence.js": {
       "maxDuration": 30
