@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>영어 어휘 퀴즈</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; }
+        .container { max-width: 428px; margin: 0 auto; background: white; min-height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { ChevronRight, RotateCcw, BookOpen, Target, Trophy, CheckCircle, XCircle } = lucide;
+
+        const VocabQuizApp = () => {
+            const [currentScreen, setCurrentScreen] = useState('home');
+            const [currentQuestion, setCurrentQuestion] = useState(0);
+            const [score, setScore] = useState(0);
+            const [selectedAnswer, setSelectedAnswer] = useState(null);
+            const [showResult, setShowResult] = useState(false);
+            const [quizData, setQuizData] = useState([]);
+            const [vocabularyData, setVocabularyData] = useState([]);
+            const [totalQuestions] = useState(10);
+            const [loading, setLoading] = useState(false);
+            const [cache, setCache] = useState({});
+
+            // MD 파일 파싱
+            const parseMarkdown = (text) => {
+                const entries = [];
+                const lines = text.split('\n');
+                let currentTerm = null;
+                let currentDefinition = '';
+                let inPhrasesSection = false;
+
+                for (let line of lines) {
+                    if (line.startsWith('## Phrases')) {
+                        inPhrasesSection = true;
+                        continue;
+                    }
+
+                    // ### 단어/구문 헤더
+                    const termMatch = line.match(/^###\s+(.*)$/);
+                    if (termMatch) {
+                        if (currentTerm && currentDefinition) {
+                            entries.push({
+                                term: currentTerm,
+                                definition: currentDefinition.trim()
+                            });
+                        }
+                        currentTerm = termMatch[1].trim();
+                        currentDefinition = '';
+                        continue;
+                    }
+
+                    // **Definition:** 정의
+                    const defMatch = line.match(/\*\*Definition:\*\*\s+(.*)/);
+                    if (defMatch && !inPhrasesSection) {
+                        currentDefinition = defMatch[1].trim();
+                        continue;
+                    }
+
+                    // Phrases 섹션에서는 헤더 이후 모든 텍스트를 정의로
+                    if (inPhrasesSection && currentTerm && line.trim() && !line.startsWith('**Example')) {
+                        currentDefinition += ' ' + line.trim();
+                    }
+                }
+
+                // 마지막 항목 추가
+                if (currentTerm && currentDefinition) {
+                    entries.push({
+                        term: currentTerm,
+                        definition: currentDefinition.trim()
+                    });
+                }
+
+                return entries;
+            };
+
+            // 데이터 로드
+            useEffect(() => {
+                const loadData = async () => {
+                    try {
+                        // MD 파일 로드
+                        const mdResponse = await fetch('./vocabulary_complete.md');
+                        const mdText = await mdResponse.text();
+                        const parsed = parseMarkdown(mdText);
+                        setVocabularyData(parsed);
+
+                        // 캐시 파일 로드
+                        try {
+                            const cacheResponse = await fetch('./llm_sentence_cache.json');
+                            const cacheData = await cacheResponse.json();
+                            setCache(cacheData);
+                        } catch (e) {
+                            console.log('캐시 파일 없음, 기본값 사용');
+                        }
+                    } catch (error) {
+                        console.error('데이터 로드 실패:', error);
+                        // 폴백 데이터
+                        setVocabularyData([
+                            { term: "drab", definition: "dull, boring, and lacking in color or vitality" },
+                            { term: "mildew", definition: "a thin growth of fungus that appears on damp surfaces" },
+                            { term: "cedar", definition: "a durable, pleasantly scented type of wood" }
+                        ]);
+                    }
+                };
+                loadData();
+            }, []);
+
+            // 예문 생성
+            const generateExample = async (term) => {
+                // 캐시 확인
+                if (cache[term]) {
+                    return cache[term];
+                }
+
+                try {
+                    setLoading(true);
+                    const response = await fetch('/api/generate-sentence', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ term })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        return data.sentence;
+                    }
+                } catch (error) {
+                    console.error('예문 생성 실패:', error);
+                } finally {
+                    setLoading(false);
+                }
+
+                // 폴백 예문
+                return `This is an example of _____.`;
+            };
+
+            // 퀴즈 데이터 생성
+            const generateQuiz = async () => {
+                if (vocabularyData.length === 0) return;
+                
+                const shuffled = [...vocabularyData].sort(() => Math.random() - 0.5);
+                const selected = shuffled.slice(0, totalQuestions);
+                
+                const quiz = await Promise.all(selected.map(async (item) => {
+                    const allTerms = vocabularyData.map(v => v.term);
+                    const wrongAnswers = allTerms
+                        .filter(term => term !== item.term)
+                        .sort(() => Math.random() - 0.5)
+                        .slice(0, 3);
+                    
+                    const options = [item.term, ...wrongAnswers].sort(() => Math.random() - 0.5);
+                    const example = await generateExample(item.term);
+                    
+                    return {
+                        ...item,
+                        options,
+                        correctAnswer: item.term,
+                        example
+                    };
+                }));
+                
+                setQuizData(quiz);
+            };
+
+            // 답안 선택
+            const handleAnswerSelect = (answer) => {
+                if (selectedAnswer !== null) return;
+                
+                setSelectedAnswer(answer);
+                setShowResult(true);
+                
+                if (answer === quizData[currentQuestion].correctAnswer) {
+                    setScore(score + 1);
+                }
+            };
+
+            // 다음 문제
+            const handleNext = () => {
+                if (currentQuestion < totalQuestions - 1) {
+                    setCurrentQuestion(currentQuestion + 1);
+                    setSelectedAnswer(null);
+                    setShowResult(false);
+                } else {
+                    setCurrentScreen('result');
+                }
+            };
+
+            // 퀴즈 시작
+            const startQuiz = async () => {
+                await generateQuiz();
+                setCurrentScreen('quiz');
+                setCurrentQuestion(0);
+                setScore(0);
+                setSelectedAnswer(null);
+                setShowResult(false);
+            };
+
+            // 홈으로
+            const goHome = () => {
+                setCurrentScreen('home');
+            };
+
+            // 홈 화면
+            const HomeScreen = () => (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col">
+                    <div className="bg-white shadow-sm px-6 py-4">
+                        <div className="flex items-center space-x-3">
+                            <div className="bg-blue-500 p-2 rounded-lg">
+                                <BookOpen className="w-6 h-6 text-white" />
+                            </div>
+                            <div>
+                                <h1 className="text-xl font-bold text-gray-900">Vocab Quiz</h1>
+                                <p className="text-sm text-gray-600">영어 어휘 학습</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 flex flex-col justify-center px-6 py-8">
+                        <div className="text-center mb-8">
+                            <div className="bg-white p-8 rounded-2xl shadow-lg mb-6">
+                                <Target className="w-16 h-16 text-blue-500 mx-auto mb-4" />
+                                <h2 className="text-2xl font-bold text-gray-900 mb-2">어휘 실력을 테스트해보세요!</h2>
+                                <p className="text-gray-600">정의를 보고 올바른 단어를 선택하는 퀴즈입니다.</p>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-4 mb-8">
+                                <div className="bg-white p-4 rounded-xl shadow">
+                                    <div className="text-2xl font-bold text-blue-500">{vocabularyData.length}</div>
+                                    <div className="text-sm text-gray-600">총 단어 수</div>
+                                </div>
+                                <div className="bg-white p-4 rounded-xl shadow">
+                                    <div className="text-2xl font-bold text-green-500">{totalQuestions}</div>
+                                    <div className="text-sm text-gray-600">문제 수</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button
+                            onClick={startQuiz}
+                            disabled={vocabularyData.length === 0 || loading}
+                            className="bg-blue-500 text-white py-4 px-8 rounded-xl font-semibold text-lg shadow-lg active:bg-blue-600 transition-colors flex items-center justify-center space-x-2 disabled:bg-gray-400"
+                        >
+                            {loading ? (
+                                <span>로딩중...</span>
+                            ) : (
+                                <>
+                                    <span>퀴즈 시작하기</span>
+                                    <ChevronRight className="w-5 h-5" />
+                                </>
+                            )}
+                        </button>
+                    </div>
+                </div>
+            );
+
+            // 퀴즈 화면
+            const QuizScreen = () => {
+                const current = quizData[currentQuestion];
+                if (!current) return <div className="p-6">로딩중...</div>;
+
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100">
+                        <div className="bg-white shadow-sm px-6 py-4">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <div className="text-sm text-gray-600">문제 {currentQuestion + 1} / {totalQuestions}</div>
+                                    <div className="text-lg font-semibold text-gray-900">점수: {score}</div>
+                                </div>
+                                <div className="text-right">
+                                    <div className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium">
+                                        {Math.round(((currentQuestion) / totalQuestions) * 100)}% 완료
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="mt-3 bg-gray-200 rounded-full h-2">
+                                <div 
+                                    className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                                    style={{ width: `${((currentQuestion) / totalQuestions) * 100}%` }}
+                                ></div>
+                            </div>
+                        </div>
+
+                        <div className="p-6">
+                            <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
+                                <h3 className="text-lg font-semibold text-gray-900 mb-4">다음 정의에 맞는 단어는?</h3>
+                                <div className="bg-blue-50 p-4 rounded-xl mb-4">
+                                    <p className="text-gray-800 font-medium">{current.definition}</p>
+                                </div>
+                                {current.example && (
+                                    <div className="bg-yellow-50 p-4 rounded-xl">
+                                        <p className="text-sm text-gray-700">
+                                            <span className="font-medium">예문:</span> {current.example}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="space-y-3">
+                                {current.options.map((option, index) => {
+                                    let buttonClass = "w-full p-4 rounded-xl border-2 text-left font-medium transition-all duration-200 ";
+                                    
+                                    if (showResult) {
+                                        if (option === current.correctAnswer) {
+                                            buttonClass += "bg-green-100 border-green-500 text-green-800";
+                                        } else if (option === selectedAnswer && option !== current.correctAnswer) {
+                                            buttonClass += "bg-red-100 border-red-500 text-red-800";
+                                        } else {
+                                            buttonClass += "bg-gray-100 border-gray-300 text-gray-600";
+                                        }
+                                    } else {
+                                        buttonClass += "bg-white border-gray-300 text-gray-800 active:bg-gray-50";
+                                    }
+
+                                    return (
+                                        <button
+                                            key={index}
+                                            onClick={() => handleAnswerSelect(option)}
+                                            disabled={showResult}
+                                            className={buttonClass}
+                                        >
+                                            <div className="flex items-center justify-between">
+                                                <span>{option}</span>
+                                                {showResult && option === current.correctAnswer && (
+                                                    <CheckCircle className="w-5 h-5 text-green-600" />
+                                                )}
+                                                {showResult && option === selectedAnswer && option !== current.correctAnswer && (
+                                                    <XCircle className="w-5 h-5 text-red-600" />
+                                                )}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {showResult && (
+                                <div className="mt-6">
+                                    <button
+                                        onClick={handleNext}
+                                        className="w-full bg-blue-500 text-white py-4 rounded-xl font-semibold text-lg shadow-lg active:bg-blue-600 transition-colors flex items-center justify-center space-x-2"
+                                    >
+                                        <span>{currentQuestion < totalQuestions - 1 ? '다음 문제' : '결과 보기'}</span>
+                                        <ChevronRight className="w-5 h-5" />
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            // 결과 화면
+            const ResultScreen = () => {
+                const percentage = Math.round((score / totalQuestions) * 100);
+                let grade = '';
+                let gradeColor = '';
+                
+                if (percentage >= 90) {
+                    grade = '우수';
+                    gradeColor = 'text-green-600';
+                } else if (percentage >= 70) {
+                    grade = '양호';
+                    gradeColor = 'text-blue-600';
+                } else if (percentage >= 50) {
+                    grade = '보통';
+                    gradeColor = 'text-yellow-600';
+                } else {
+                    grade = '노력필요';
+                    gradeColor = 'text-red-600';
+                }
+
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex flex-col">
+                        <div className="bg-white shadow-sm px-6 py-4">
+                            <h1 className="text-xl font-bold text-gray-900">퀴즈 완료!</h1>
+                        </div>
+
+                        <div className="flex-1 flex flex-col justify-center px-6 py-8">
+                            <div className="text-center">
+                                <div className="bg-white p-8 rounded-2xl shadow-lg mb-6">
+                                    <Trophy className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
+                                    <h2 className="text-3xl font-bold text-gray-900 mb-2">{score} / {totalQuestions}</h2>
+                                    <div className="text-2xl font-semibold mb-2">{percentage}%</div>
+                                    <div className={`text-lg font-medium ${gradeColor} mb-4`}>{grade}</div>
+                                    
+                                    <div className="bg-gray-100 rounded-full h-4 mb-4">
+                                        <div 
+                                            className="bg-blue-500 h-4 rounded-full transition-all duration-1000"
+                                            style={{ width: `${percentage}%` }}
+                                        ></div>
+                                    </div>
+                                    
+                                    <p className="text-gray-600">
+                                        {percentage >= 70 ? '훌륭한 성과입니다!' : '더 많은 연습이 필요해요!'}
+                                    </p>
+                                </div>
+                                
+                                <div className="space-y-3">
+                                    <button
+                                        onClick={startQuiz}
+                                        className="w-full bg-blue-500 text-white py-4 rounded-xl font-semibold text-lg shadow-lg active:bg-blue-600 transition-colors flex items-center justify-center space-x-2"
+                                    >
+                                        <RotateCcw className="w-5 h-5" />
+                                        <span>다시 도전하기</span>
+                                    </button>
+                                    
+                                    <button
+                                        onClick={goHome}
+                                        className="w-full bg-gray-500 text-white py-4 rounded-xl font-semibold text-lg shadow-lg active:bg-gray-600 transition-colors"
+                                    >
+                                        홈으로 돌아가기
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="container">
+                    {currentScreen === 'home' && <HomeScreen />}
+                    {currentScreen === 'quiz' && <QuizScreen />}
+                    {currentScreen === 'result' && <ResultScreen />}
+                </div>
+            );
+        };
+
+        ReactDOM.render(<VocabQuizApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>

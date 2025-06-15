@@ -1,0 +1,26 @@
+{
+  "name": "vocab-quiz-app",
+  "version": "1.0.0",
+  "description": "영어 어휘 학습 퀴즈 앱",
+  "main": "index.html",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'No build step required'",
+    "deploy": "vercel --prod"
+  },
+  "keywords": [
+    "vocabulary",
+    "quiz",
+    "english",
+    "learning",
+    "education"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "vercel": "^32.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
